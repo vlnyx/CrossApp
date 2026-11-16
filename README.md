@@ -93,9 +93,10 @@ dotnet publish src/Cli -c Release -r win-x64 --self-contained false
 | linux-x64 | self-contained      | ~78.8 МБ       | ні               |
 ### Інваріанти доменної моделі (Лабораторна робота 4)
 1. **ISBN не порожній**: Перевіряється у фабричному методі `BookCopy.Create`. Кидає `ArgumentException`.
-2. **Не видати вже виданий примірник**: Перевіряється у методі `BookCopy.Issue()`. Кидає `InvalidOperationException`.
-3. **Дата повернення не раніше дати видачі**: Перевіряється у методі `Loan.Close()`. Кидає `ArgumentOutOfRangeException`.
-4. **Не закрити закриту видачу**: Перевіряється у методі `Loan.Close()`. Кидає `InvalidOperationException`.
+2. **Не видати вже виданий примірник**: Перевіряється у методі `BookCopy.Issue()`. Кидає `DomainException`.
+3. **Не повернути невиданий примірник**: Перевіряється у методі `BookCopy.Return()`. Кидає `DomainException`.
+4. **Дата повернення не раніше дати видачі**: Перевіряється у методі `Loan.Close()`. Кидає `ArgumentOutOfRangeException`.
+5. **Не закрити закриту видачу**: Перевіряється у методі `Loan.Close()`. Кидає `InvalidOperationException`.
 ## Архітектурні рішення (Лабораторна робота 5)
 1. **Dependency Inversion:** `LendingService` залежить виключно від абстракції `IBookStore`, а не від конкретних реалізацій сховищ (`InMemory` чи `File`).
 2. **Composition Root:** Єдине місце, де використовуються оператори `new` для створення конкретних сховищ — це точка входу застосунку `Program.cs`. Це дозволяє легко замінити файлове сховище на базу даних у майбутньому без зміни коду сервісу.
@@ -107,6 +108,7 @@ dotnet publish src/Cli -c Release -r win-x64 --self-contained false
 dotnet run --project src/Cli -- report-top
 dotnet run --project src/Cli -- report-low
 dotnet run --project src/Cli -- report-groups
+dotnet run --project src/Cli -- report-groups-query
 dotnet run --project src/Cli -- report-sum
 dotnet run --project src/Cli -- report-deferred
 dotnet run --project src/Cli -- report-loan-details
@@ -231,11 +233,13 @@ Intermezzo                   Reader-C                       25.10.2026
 
 ```text
 Генерація 100 000 записів...
-Час БЕЗ проміжного ToList: 11 мс
-Час З проміжним ToList: 7 мс
+Час БЕЗ проміжного ToList: 13 мс
+Час З проміжним ToList: 9 мс
 ```
 
 Час залежить від середовища та навантаження; один запуск не є універсальним висновком про продуктивність.
+
+Для окремого звіту, реалізованого query syntax, запустіть `dotnet run --project src/Cli -- report-groups-query`.
 
 ### Відкладене виконання та матеріалізація
 
@@ -243,7 +247,19 @@ Intermezzo                   Reader-C                       25.10.2026
 
 ### Додаткові завдання
 
-- `Join` реалізовано у звітах прострочених видач і `AdvancedReportService.GetLoanDetails`, результат проєктується у DTO.
+- `Join` реалізовано у звітах прострочених видач і `AdvancedReportService.GetLoanDetails`, результат проєктується у DTO `OverdueLoanReport` або `BookLoanDetails`.
 - Власний `TopBy` має другий критерій сортування та використаний у двох методах `AdvancedReportService`.
-- `BooksByGenreQuerySyntax` реалізує групування у query syntax; методний варіант `BooksByGenre` простіше читати як послідовність операторів, а query syntax компактніше показує конструкцію `group ... into`.
+- `BooksByGenreQuerySyntax` реалізує звіт у query syntax (`from` / `group` / `into`) і доступний через `report-groups-query`. У цьому прикладі query syntax виразно показує групування в одному блоці; методний `BooksByGenre` простіше розширювати ланцюжком операторів і явно задавати comparer. Обидві реалізації повертають однакові результати, зокрема для назв жанрів із різним регістром.
 - `report-performance` вимірює два варіанти оброблення 100 000 записів через `Stopwatch`. Проміжний `ToList()` зберігає відфільтровані дані окремо, але додає виділення пам'яті та копіювання; заміри часу одного запуску не є універсальним висновком про продуктивність.
+
+### Асинхронний імпорт каталогу бібліотеки
+
+JSON-каталог можна імпортувати асинхронно; під час читання підтримується скасування через `Ctrl+C`. Записи відповідають `BookCopyDto` (поля `id`, `isbn`, `isIssued`, `title`, `genre`, `quantity`), а ID, які вже є у сховищі, пропускаються:
+
+```bash
+dotnet run --project src/Cli -- import-books data/book-catalog.json
+dotnet run --project src/Cli -- import-books data/book-catalog.json --file
+dotnet test
+```
+
+Читання виконується через асинхронний `FileStream`; JSON та помилки валідації записів подаються як `DomainException`. У разі `--file` імпортовані записи зберігаються у файловому каталозі.

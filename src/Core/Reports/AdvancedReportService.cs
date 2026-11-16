@@ -44,15 +44,19 @@ public static class AdvancedReportService
 
     public static IReadOnlyList<GroupSummary> BooksByGenreQuerySyntax(IEnumerable<BookCopy> books)
     {
+        ArgumentNullException.ThrowIfNull(books);
+
         var query =
             from book in books
-            group book by book.Genre into genreGroup
-            orderby genreGroup.Sum(item => item.Quantity) descending, genreGroup.Key
+            group book by book.Genre.ToUpperInvariant() into genreGroup
             select new GroupSummary(
-                genreGroup.Key,
+                genreGroup.First().Genre,
                 genreGroup.Count(),
                 genreGroup.Sum(item => item.Quantity));
 
-        return query.ToList();
+        return query
+            .OrderByDescending(summary => summary.TotalQuantity)
+            .ThenBy(summary => summary.Key, StringComparer.Ordinal)
+            .ToList();
     }
 }

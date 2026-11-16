@@ -1,48 +1,36 @@
-using Core.Domain; 
-using Core.Abstractions;
 using System;
 using System.Collections.Generic;
-using System.Linq;
-using Core.Events;
+using System.Threading;
+using System.Threading.Tasks;
+using Core.Abstractions;
+using Core.Domain;
 
-namespace Core.Services;
-
-public sealed class LibraryService(IBookStore store, IEnumerable<INotificationSink> sinks)
+namespace Core.Services
 {
-    private readonly IBookStore _store = store ?? throw new ArgumentNullException(nameof(store));
-    private readonly IEnumerable<INotificationSink> _sinks = sinks ?? [];
-    
-    public event EventHandler<LibraryChangedEventArgs>? Changed;
-
-    private void OnChanged(string copyId, LibraryChangeKind kind, string? readerId = null, DateTimeOffset? dueDate = null)
+    public class LibraryService
     {
-        Changed?.Invoke(this, new LibraryChangedEventArgs(copyId, kind, readerId, dueDate));
+        private readonly List<BookCopy> _store = new List<BookCopy>();
+        public event EventHandler<BookCopy>? Changed;
 
-        string message = $"[Sink] Зміна стану: {kind} для {copyId}";
-        foreach (var sink in _sinks)
+        public async Task<int> ImportAsync(
+            ICatalogImporter importer, 
+            string path, 
+            IProgress<int>? progress = null, 
+            CancellationToken ct = default)
         {
-            sink.Notify(message);
+            var added = 0;
+            
+            await foreach (var item in importer.LoadAsync(path, ct))
+            {
+                if (_store.Exists(b => b.Id == item.Id)) continue;
+                
+                _store.Add(item);
+                Changed?.Invoke(this, item);
+                added++;
+                
+                progress?.Report(added);
+            }
+            return added;
         }
     }
-
-    public BookCopy AddBook(string id, string isbn)
-    {
-        var copy = BookCopy.Create(id, isbn);
-        _store.Add(copy);
-        OnChanged(copy.Id, LibraryChangeKind.BookAdded);
-        return copy;
-    }
-
-    public void IssueBook(string copyId, string readerId, DateTimeOffset dueDate)
-    {
-        var copy = _store.GetById(copyId) ?? throw new InvalidOperationException($"Немає запису з id={copyId}.");
-        
-        copy.Issue();
-        _store.Update(copy);
-        
-        OnChanged(copy.Id, LibraryChangeKind.CopyIssued, readerId, dueDate);
-    }
-
-    public IReadOnlyList<BookCopy> FindAll(Func<BookCopy, bool> predicate) =>
-        _store.List().Where(predicate).ToList();
 }

@@ -1,123 +1,74 @@
+using System;
+using System.IO;
+using System.Threading;
+using System.Threading.Tasks;
 using Core.Domain;
+using Core.Services;
+using Core.Storage;
 using Core;
-using Core.Reports;
 
 namespace Cli;
 
 internal static class Program
 {
-    private static void Main(string[] args)
+    static async Task Main(string[] args)
     {
-        var store = StoreFactory.Create(args);
-        var books = store.List();
-        IReadOnlyList<Loan> loans = SampleData.Loans;
-
-        string command = args.FirstOrDefault(argument =>
-            !argument.StartsWith("--", StringComparison.Ordinal)) ?? "report-top";
-
-        switch (command)
+        using var userCts = new CancellationTokenSource();
+        Console.CancelKeyPress += (_, e) =>
         {
-            case "report-top":
-            case "report-readers":
-                Print(AdvancedReportService.TopReadersCustom(loans, 5));
-                break;
+            e.Cancel = true;
+            userCts.Cancel();
+        };
 
-            case "report-low":
-            case "report-overdue":
-                Print(LibraryReportService.OverdueLoans(books, loans));
-                break;
+        using var timeoutCts = new CancellationTokenSource();
+        timeoutCts.CancelAfter(TimeSpan.FromSeconds(5));
 
-            case "report-loan-details":
-                Print(AdvancedReportService.GetLoanDetails(books, loans));
-                break;
+        using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(userCts.Token, timeoutCts.Token);
 
-            case "report-groups":
-            case "report-genres":
-                Print(LibraryReportService.BooksByGenre(books));
-                break;
+        var service = new LibraryService();
+        string dataPath = args.Length > 0 ? args[0] : "data/sample.json";
 
-            case "report-top-genres":
-                Print(AdvancedReportService.TopGenresCustom(books, 5));
-                break;
-
-            case "report-sum":
-            case "report-totals":
-                var totals = LibraryReportService.Totals(books);
-                Console.WriteLine(
-                    $"Книг: {totals.Items}, примірників: {totals.Total}, " +
-                    $"середня кількість примірників: {totals.Average:F2}, максимум: {totals.Max}");
-                break;
-
-            case "report-deferred":
-                var deferred = LibraryReportService.DeferredExecutionDemo(books);
-                Console.WriteLine($"Дефіцитних до зміни джерела: {deferred.BeforeChange}");
-                Console.WriteLine($"Дефіцитних після зміни джерела: {deferred.AfterChange}");
-                Console.WriteLine($"У матеріалізованому знімку: {deferred.SnapshotCount}");
-                break;
-
-            case "report-performance":
-                PerformanceTest.Run();
-                break;
-
-            default:
-                Console.WriteLine(
-                    "Команди: report-top | report-low | report-groups | report-sum | " +
-                    "report-deferred | report-loan-details | report-top-genres | report-performance");
-                break;
-        }
-    }
-
-    private static void Print(IReadOnlyList<ReaderReport> reports)
-    {
-        if (reports.Count == 0)
+        int expectedTotal = 15;
+        var progress = new Progress<int>(added =>
         {
-            Console.WriteLine("Звіт порожній.");
-            return;
-        }
+            int percent = expectedTotal > 0 ? (int)((added / (double)expectedTotal) * 100) : 0;
+            Console.Write($"\rProgress: {percent}% ({added}/{expectedTotal})   ");
+        });
 
-        Console.WriteLine($"{"Читач",-24} {"Видач",6}");
-        foreach (var report in reports)
-            Console.WriteLine($"{report.ReaderId,-24} {report.LoanCount,6}");
-    }
-
-    private static void Print(IReadOnlyList<OverdueLoanReport> reports)
-    {
-        if (reports.Count == 0)
+        try
         {
-            Console.WriteLine("Прострочених видач немає.");
-            return;
+            Console.WriteLine("Starting import...");
+            Console.WriteLine("Press Ctrl+C to cancel.\n");
+
+            var importer = new JsonCatalogImporter();
+            var added = await service.ImportAsync(importer, dataPath, progress, linkedCts.Token);
+
+            Console.WriteLine($"\n\nImport completed successfully. Added: {added}");
         }
-
-        Console.WriteLine($"{"ID видачі",-24} {"Назва книги",-28} {"Читач",-20} {"Термін повернення",20}");
-        foreach (var report in reports)
-            Console.WriteLine(
-                $"{report.Id,-24} {report.BookTitle,-28} {report.ReaderId,-20} {report.DueDate,20:d}");
-    }
-
-    private static void Print(IReadOnlyList<GroupSummary> reports)
-    {
-        if (reports.Count == 0)
+        catch (OperationCanceledException)
         {
-            Console.WriteLine("Даних для групування немає.");
-            return;
+            Console.WriteLine("\n\nImport cancelled.");
+
+            if (timeoutCts.IsCancellationRequested)
+            {
+                Console.WriteLine("Reason: Timeout.");
+            }
+            else if (userCts.IsCancellationRequested)
+            {
+                Console.WriteLine("Reason: Cancelled by user (Ctrl+C).");
+            }
         }
-
-        Console.WriteLine($"{"Жанр",-24} {"Книг",6} {"Примірників",14}");
-        foreach (var report in reports)
-            Console.WriteLine($"{report.Key,-24} {report.Count,6} {report.TotalQuantity,14}");
-    }
-
-    private static void Print(IReadOnlyList<BookLoanDetails> reports)
-    {
-        if (reports.Count == 0)
+        catch (DomainException ex)
         {
-            Console.WriteLine("Даних про видачі немає.");
-            return;
+            Console.WriteLine($"\n\nData rejected: {ex.Message}");
         }
-
-        Console.WriteLine($"{"Книга",-28} {"Читач",-20} {"Термін повернення",20}");
-        foreach (var report in reports)
-            Console.WriteLine(
-                $"{report.BookTitle,-28} {report.ReaderId,-20} {report.DueDate,20:d}");
+        catch (FileNotFoundException)
+        {
+            Console.WriteLine($"\n\nFile not found: {dataPath}");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"\n\nAn error occurred: {ex.Message}");
+        }
     }
 }

@@ -23,28 +23,28 @@ public static class PerformanceTest
         var sw = new Stopwatch();
 
         sw.Start();
-        var lazyReport = largeData
+        var streamedReport = largeData
             .Where(book => !book.IsIssued)
             .GroupBy(book => book.Isbn)
             .Select(group => new { Isbn = group.Key, Copies = group.Count() })
             .ToList();
         sw.Stop();
-        var timeLazy = sw.ElapsedMilliseconds;
+        var streamedTime = sw.ElapsedMilliseconds;
 
         sw.Restart();
-        var greedyReport = largeData
+        var materializedReport = largeData
             .Where(book => !book.IsIssued)
             .ToList()
             .GroupBy(book => book.Isbn)
             .Select(group => new { Isbn = group.Key, Copies = group.Count() })
             .ToList();
         sw.Stop();
-        var timeGreedy = sw.ElapsedMilliseconds;
+        var materializedTime = sw.ElapsedMilliseconds;
 
-        if (!lazyReport.SequenceEqual(greedyReport))
+        if (!streamedReport.SequenceEqual(materializedReport))
             throw new InvalidOperationException("Результати LINQ-звітів відрізняються.");
 
-        Console.WriteLine($"Час БЕЗ проміжного ToList: {timeLazy} мс");
-        Console.WriteLine($"Час З проміжним ToList: {timeGreedy} мс");
+        Console.WriteLine($"Час БЕЗ проміжного ToList: {streamedTime} мс");
+        Console.WriteLine($"Час З проміжним ToList: {materializedTime} мс");
     }
 }
